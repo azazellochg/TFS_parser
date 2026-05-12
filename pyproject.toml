@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tfs_parser"
+version = "1.0"
+authors = [{name = "Grigory Sharov", email = "gsharov@mrclmb.ac.uk"}]
+description = "TFS parser is a Python package designed for parsing metadata from Thermo Fisher Scientific EPU and Tomo software."
+readme = {file = "README.rst", content-type = "text/x-rst"}
+requires-python = ">=3.9"
+keywords = ["microscope", "metadata", "EPU", "Tomo"]
+classifiers=[
+    'Development Status :: 4 - Beta',
+    'Programming Language :: Python :: 3',
+    'Operating System :: POSIX :: Linux',
+]
+license = "GPL-3.0-or-later"
+dependencies = [
+    'pandas',
+    'mdocfile'
+]
+
+[project.optional-dependencies]
+extra = ['streamlit', 'altair']
+
+[project.urls]
+Homepage = "https://github.com/azazellochg/tfs_parser"
+Issues = "https://github.com/azazellochg/tfs_parser/issues"
+
+[project.scripts]
+parse_epu = "parse_epu_session:main"
+parse_tomo = "parse_tomo_session:main"
+
+[tool.setuptools]
+py-modules = [
+    "dashboard",
+    "parse_tomo_session",
+    "parse_epu_session"
+]
+include-package-data = true
+
+[tool.setuptools.data-files]
+"." = ["get_files.sh"]
+".streamlit" = [".streamlit/config.toml"]

@@ -1,12 +1,13 @@
 #!/usr/bin/python3
 
 import os
-import sys
-from glob import iglob
+from pathlib import Path
+import csv
 import math
+import argparse
 import xml.etree.ElementTree as ET
 
-DEBUG = 0
+DEBUG = True
 UNKNOWN = "UNKNOWN"
 nspace = {
     'so': '{http://schemas.datacontract.org/2004/07/Fei.SharedObjects}',
@@ -22,82 +23,93 @@ nspace = {
 }
 
 
-def parseFiles(path):
-    dicts = list()
-    with open(path) as f:
-        files = f.readlines()
+def parse_files(list_file: Path):
+    rows = []
 
-    fnOut = os.path.splitext(os.path.basename(path))[0] + ".csv"
-    if os.path.exists(fnOut):
-        os.remove(fnOut)
+    # Read session file paths
+    session_files = [
+        Path(line.strip())
+        for line in list_file.read_text().splitlines()
+        if line.strip()
+    ]
 
-    ofile = open(fnOut, 'a+')
+    # Output file
+    output_file = list_file.with_suffix(".csv")
+    if output_file.exists():
+        output_file.unlink()
 
-    for sessionFn in files:
-        sessionFn = sessionFn.rstrip("\n")
-        if os.path.basename(sessionFn) != "EpuSession.dm":
+    for session_path in session_files:
+        if session_path.name != "EpuSession.dm":
             continue
 
-        sessionDir = os.path.dirname(sessionFn)
-        files2 = iglob(os.path.join(sessionDir, "Images-Disc*/GridSquare*/Data/FoilHole_*_Data_*.xml"),
-                       recursive=True)
-        holeFn = next(files2, None)
+        session_dir = session_path.parent
 
-        print("=" * 100, "\nsession xml: ", sessionFn, "\nhole xml: ", holeFn)
-        outputDict = parseSessionXml(ET.parse(sessionFn).getroot())
-        if holeFn:
-            holeDict = parseHoleXml(ET.parse(holeFn).getroot(), outputDict)
-            outputDict.update(**holeDict)
-        for k, v in sorted(outputDict.items()):
-            print(f"{k} = {v}")
+        # Find first matching movie XML
+        movie_files = session_dir.glob("Images-Disc*/GridSquare*/Data/FoilHole_*_Data_*.xml")
+        movie_path = next(movie_files, None)
 
-        ofile.write("\n")
-        for k, v in outputDict.items():
-            ofile.write(f"{v}\t")
+        if DEBUG:
+            print(f"Parsing session XML: {session_path}")
 
-        dicts.append(outputDict)
+        output_dict = parseSessionXml(session_path)
 
-    ofile.close()
+        if movie_path:
+            if DEBUG:
+                print(f"Parsing movie XML: {movie_path}")
 
-    # write the largest dict header
-    max_dict = max(dicts, key=lambda d: len(d))
-    header = "\t".join(max_dict.keys())
+            movie_dict = parseMovieXml(movie_path, output_dict)
+            output_dict.update(movie_dict)
 
-    with open(fnOut, "r+") as ofile:
-        content = ofile.read()
-        ofile.seek(0, 0)
-        ofile.write(header + content)
+        rows.append(output_dict)
 
-    print(f"\n=> Output saved to {fnOut}")
+    if not rows:
+        print("No data found")
+        return
+
+    fieldnames = sorted({key for row in rows for key in row})
+
+    with output_file.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=fieldnames,
+            quoting=csv.QUOTE_MINIMAL
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"\n=> Output saved to {output_file}")
 
 
-def parseSessionXml(root):
-    acqDict = dict()
-    defocusList = list()
-    numExp = "./{app}Samples/{app}_items/{app}SampleXml/{app}TargetAreaTemplate/{app}DataAcquisitionAreas/{ar}m_serializationArray"
-    defocus = numExp + "/*[1]/{gen}value/{app}ImageAcquisitionSettingXml/{app}Defocus/{ar}_items"
-    defocus = root.find(defocus.format(**nspace))
+def parseSessionXml(session_fn: Path):
+    root = ET.parse(session_fn).getroot()
+    output_dict = dict()
+
+    # Defocus list & number of exposures
+    numExpPath = "./{app}Samples/{app}_items/{app}SampleXml/{app}TargetAreaTemplate/{app}DataAcquisitionAreas/{ar}m_serializationArray"
+    defocusPath = numExpPath + "/*[1]/{gen}value/{app}ImageAcquisitionSettingXml/{app}Defocus/{ar}_items"
+    defocus = root.find(defocusPath.format(**nspace))
 
     if defocus is None:
-        # try again
-        defocus = numExp + "/*[1]/{gen}value/{app}ImageAcquisitionSettingXml/{app}Defocus"
-        defocus = root.find(defocus.format(**nspace))
+        defocusPath = (numExpPath + "/*[1]/{gen}value/{app}ImageAcquisitionSettingXml/{app}Defocus")
+        defocus = root.find(defocusPath.format(**nspace))
 
     if defocus is not None:
-        for i in defocus:
-            # convert to microns
-            defocusList.append(round(float(i.text) * math.pow(10, 6), 2))
+        defocusList = [round(float(str(i.text)) * 1e6, 2) for i in defocus]
+        output_dict["Defocus list"] = sorted(defocusList)
 
-    numExp = root.find(numExp.format(**nspace))
+    numExp = root.find(numExpPath.format(**nspace))
+
     if numExp is not None:
-        numExp = numExp.attrib['{ser}Size'.format(**nspace)]
-    if numExp is None:
-        numExp = UNKNOWN
+        output_dict["Number of exposures"] = numExp.attrib.get('{ser}Size'.format(**nspace), UNKNOWN)
+    else:
+        output_dict["Number of exposures"] = UNKNOWN
 
-    acqDict["Number of exposures"] = numExp
-    acqDict["Defocus list"] = sorted(defocusList)
-
-    items = {
+    # Simple (direct-root) items
+    root_items = {
+        'AfisMode': "./{app}AfisMode",
+        'AutoZeroLossEnabled': "./{app}AutoZeroLossEnabled",
+        'AutoZeroLossPeriodicity': "./{app}AutoZeroLossPeriodicity",
+        'AutoloaderSlot': "./{app}AutoloaderSlot",
         'ClusteringMode': "./{app}ClusteringMode",
         'ClusteringRadius': "./{app}ClusteringRadius",
         'DoseFractionsOutputFormat': "./{app}DoseFractionsOutputFormat",
@@ -105,8 +117,10 @@ def parseSessionXml(root):
         'PhasePlateEnabled': "./{app}PhasePlateEnabled",
         'HoleSize': "./{app}Samples/{app}_items/{app}SampleXml/{app}FilterHolesSettings/{app}HoleSize",
         'HoleSpacing': "./{app}Samples/{app}_items/{app}SampleXml/{app}FilterHolesSettings/{app}HoleSpacing",
-        #'SpecimenCarrierType': "./{app}Samples/{app}_items/{app}SampleXml/{app}SpecimenCarrierType",
         'GridType': "./{app}Samples/{app}_items/{app}SampleXml/{app}GridType",
+        'GridGeometry': "./{app}Samples/{app}_items/{app}SampleXml/{app}GridGeometry",
+        'TiltAngle': "./{app}TiltAngle",
+        'TiltedAcquisitionEnabled': "./{app}TiltedAcquisitionEnabled",
         'StartDateTime': "./{app}StartDateTime",
         'Autofocus recurrence': "./{app}Samples/{app}_items/{app}SampleXml/{app}TargetAreaTemplate/{app}AutoFocusArea/{app}Recurrence",
         'Autofocus distance': "./{app}Samples/{app}_items/{app}SampleXml/{app}TargetAreaTemplate/{app}AutoFocusArea/{app}RecurrenceDistance",
@@ -114,46 +128,76 @@ def parseSessionXml(root):
         'Drift threshold': "./{app}Samples/{app}_items/{app}SampleXml/{app}TargetAreaTemplate/{app}DriftStabilizationArea/{app}Threshold",
         'DelayAfterImageShift': "./{app}Samples/{app}_items/{app}SampleXml/{app}TargetAreaTemplate/{app}DelayAfterImageShift",
         'DelayAfterStageShift': "./{app}Samples/{app}_items/{app}SampleXml/{app}TargetAreaTemplate/{app}DelayAfterStageShift",
-        'Detector': "./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*[5]/{gen}value/{coser}Acquisition/{so}camera/{so}Name",
-        'Binning': "./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*[5]/{gen}value/{coser}Acquisition/{so}camera/{so}Binning/{dr}x",
-        'C2Aperture': "./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*[5]/{gen}value/{coser}Optics/{so}Apertures/{so}C2Aperture/{so}Diameter",
-        'ProbeMode': "./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*[5]/{gen}value/{coser}Optics/{so}ProbeMode",
-        'SpotSize': "./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*[5]/{gen}value/{coser}Optics/{so}SpotIndex",
-        'BeamSize': "./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*[5]/{gen}value/{coser}Optics/{so}BeamDiameter",
-        'EnergySelectionSlitWidth': "./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*[5]/{gen}value/{coser}Optics/{so}EnergyFilter/{so}EnergySelectionSlitWidth",
     }
 
-    for key in items:
+    for key, path in root_items.items():
         try:
-            acqDict[key] = root.find(items[key].format(**nspace)).text
-        except AttributeError:
-            if DEBUG:
-                print("error with key:", key)
-            acqDict[key] = UNKNOWN
+            node = root.find(path.format(**nspace))
+            output_dict[key] = node.text if node is not None else UNKNOWN
+        except Exception:
+            output_dict[key] = UNKNOWN
 
-    if acqDict['BeamSize'] not in [UNKNOWN, None]:
-        acqDict['BeamSize'] = round(float(acqDict['BeamSize']) * math.pow(10, 6), 2)
-    if acqDict['Binning'] not in [UNKNOWN, None]:
-        acqDict['Binning'] = int(acqDict['Binning'])
-    if acqDict['HoleSize'] not in [UNKNOWN, None]:
-        acqDict['HoleSize'] = round(float(acqDict['HoleSize']) * math.pow(10, 6), 2)
-    if acqDict['HoleSpacing'] not in [UNKNOWN, None]:
-        acqDict['HoleSpacing'] = round(float(acqDict['HoleSpacing']) * math.pow(10, 6), 2)
-    if acqDict['Autofocus distance'] not in [UNKNOWN, None]:
-        acqDict['Autofocus distance'] = float(acqDict['Autofocus distance']) * math.pow(10, 6)
-    if acqDict['ClusteringRadius'] not in [UNKNOWN, None]:
-        acqDict['ClusteringRadius'] = float(acqDict['ClusteringRadius']) * math.pow(10, 6)
+    # Acquisition‑specific items (relative to acquisition_value)
+    acquisition_items = {
+        'Detector': "{coser}Acquisition/{so}camera/{so}Name",
+        'Binning': "{coser}Acquisition/{so}camera/{so}Binning/{dr}x",
+        'ProbeMode': "{coser}Optics/{so}ProbeMode",
+        'SpotSize': "{coser}Optics/{so}SpotIndex",
+        'BeamSize': "{coser}Optics/{so}BeamDiameter",
+        'EnergySelectionSlitWidth': "{coser}Optics/{so}EnergyFilter/{so}EnergySelectionSlitWidth",
+        'C2Aperture': "{coser}Optics/{so}Apertures/{so}C2Aperture/{so}Diameter",
+    }
 
-    acqDict['ObjAperture'] = UNKNOWN
+    # find Acquisition settings VALUE by dictionary key
+    acquisition_value = None
+    kvps = root.findall("./{app}Samples/{app}_items/{app}SampleXml/{app}MicroscopeSettings/KeyValuePairs/*".format(**nspace))
+
+    for kvp in kvps:
+        key = kvp.find("{gen}key".format(**nspace))
+        if key is not None and key.text == "Acquisition":
+            acquisition_value = kvp.find("{gen}value".format(**nspace))
+            break
+
+    for key, path in acquisition_items.items():
+        try:
+            if acquisition_value is not None:
+                node = acquisition_value.find(path.format(**nspace))
+                output_dict[key] = node.text if node is not None else UNKNOWN
+            else:
+                output_dict[key] = UNKNOWN
+        except Exception:
+            output_dict[key] = UNKNOWN
+
+    # Unit conversions
+    if output_dict.get('BeamSize') not in [UNKNOWN, None]:
+        output_dict['BeamSize'] = round(float(output_dict['BeamSize']) * 1e6, 2)
+
+    if output_dict.get('Binning') not in [UNKNOWN, None]:
+        output_dict['Binning'] = int(output_dict['Binning'])
+
+    if output_dict.get('HoleSize') not in [UNKNOWN, None]:
+        output_dict['HoleSize'] = round(float(output_dict['HoleSize']) * 1e6, 2)
+
+    if output_dict.get('HoleSpacing') not in [UNKNOWN, None]:
+        output_dict['HoleSpacing'] = round(float(output_dict['HoleSpacing']) * 1e6, 2)
+
+    if output_dict.get('Autofocus distance') not in [UNKNOWN, None]:
+        output_dict['Autofocus distance'] = float(output_dict['Autofocus distance']) * 1e6
+
+    if output_dict.get('ClusteringRadius') not in [UNKNOWN, None]:
+        output_dict['ClusteringRadius'] = float(output_dict['ClusteringRadius']) * 1e6
+
+    output_dict['ObjAperture'] = UNKNOWN
 
     if DEBUG:
-        for k, v in sorted(acqDict.items()):
+        for k, v in sorted(output_dict.items()):
             print(f"{k} = {v}")
 
-    return acqDict
+    return output_dict
 
 
-def parseHoleXml(root, acqDict):
+def parseMovieXml(movie_fn: Path, acqDict):
+    root = ET.parse(movie_fn).getroot()
     items = {
         'GunLens': "./{so}microscopeData/{so}gun/{so}GunLens",
         'Voltage': "./{so}microscopeData/{so}gun/{so}AccelerationVoltage",
@@ -178,12 +222,17 @@ def parseHoleXml(root, acqDict):
     acqDict['Voltage'] = int(acqDict['Voltage']) // 1000
     acqDict['ExtractorVoltage'] = int(float(acqDict['ExtractorVoltage']))
 
-    # get cameraSpecificInput: ElectronCountingEnabled, SuperResolutionFactor etc.
+    # get cameraSpecificInput: ElectronCountingEnabled, SuperResolutionFactor etc. from the Acquisition preset
     customDict = dict()
     keys = "./{so}microscopeData/{so}acquisition/{so}camera/{so}CameraSpecificInput/{ar}KeyValueOfstringanyType/{ar}Key"
     values = "./{so}microscopeData/{so}acquisition/{so}camera/{so}CameraSpecificInput/{ar}KeyValueOfstringanyType/{ar}Value"
+
     for k, v in zip(root.findall(keys.format(**nspace)), root.findall(values.format(**nspace))):
-        customDict[k.text] = v.text
+        if k.text == "FractionationSettings":
+            num = v.find("{fr}NumberOffractions".format(**nspace))
+            acqDict["NumSubFrames"] = int(num.text) if num is not None else 0
+        else:
+            customDict[k.text] = v.text
 
     # check if counting/super-res is enabled
     sr = 1.0
@@ -205,38 +254,51 @@ def parseHoleXml(root, acqDict):
         except:
             pass
 
-    # get customData: Dose, DoseOnCamera, PhasePlateUsed, AppliedDefocus
-    customDict = dict()
+    if 'EnableCompression' in customDict:
+        acqDict['EnableCompression'] = customDict['EnableCompression']
+
+    # get customData: Dose, DoseOnCamera, PhasePlateUsed, AppliedDefocus from the top of xml
+    customDict2 = dict()
     keys = "./{so}CustomData/{ar}KeyValueOfstringanyType/{ar}Key"
     values = "./{so}CustomData/{ar}KeyValueOfstringanyType/{ar}Value"
     for k, v in zip(root.findall(keys.format(**nspace)), root.findall(values.format(**nspace))):
-        customDict[k.text] = v.text
+        customDict2[k.text] = v.text
 
-    if 'Detectors[BM-Falcon].EerGainReference' in customDict:
-        acqDict['NumSubFrames'] = int(int(float(acqDict['ExposureTime']) * float(customDict.get('Detectors[BM-Falcon].FrameRate', 0))) * 31 / 32)
-        acqDict['Mode'] = "EER"
-        acqDict['GainReference'] = os.path.basename(customDict['Detectors[BM-Falcon].EerGainReference'])
-    elif 'Detectors[EF-Falcon].EerGainReference' in customDict:
-        acqDict['NumSubFrames'] = int(int(float(acqDict['ExposureTime']) * float(customDict.get('Detectors[EF-Falcon].FrameRate', 0))) * 31 / 32)
-        acqDict['Mode'] = "EER"
-        acqDict['GainReference'] = os.path.basename(customDict['Detectors[EF-Falcon].EerGainReference'])
+    detectors = ['BM-Falcon', 'EF-Falcon']
+    for detector in detectors:
+        for suffix in ['EerGainReference', 'GainReference']:
+            key = f'Detectors[{detector}].{suffix}'
+            if key in customDict2:
+                acqDict['GainReference'] = os.path.basename(customDict2[key])
+
+                if customDict.get('EnableCompression', "false") == "true":
+                    acqDict['DoseFractionsOutputFormat'] = "Tiff Lzw Non-Gain normalized"
+                else:
+                    acqDict['DoseFractionsOutputFormat'] = "EER"
+                    frame_rate = float(customDict2.get(f'Detectors[{detector}].FrameRate', 0))
+                    acqDict['NumSubFrames'] = int(int(float(acqDict['ExposureTime']) * frame_rate) * 31 / 32)
+                break
+        else:
+            continue
+        break
+
     #if 'AppliedDefocus' in customDict:
     #    acqDict['AppliedDefocus'] = float(customDict['AppliedDefocus']) * math.pow(10, 6)
-    if 'Dose' in customDict:
-        acqDict['Dose'] = float(customDict['Dose']) * math.pow(10, -20)
-    if 'PhasePlateUsed' in customDict:
-        acqDict['PhasePlateUsed'] = customDict['PhasePlateUsed']
-    if 'Aperture[C2].Name' in customDict:
-        acqDict['C2Aperture'] = customDict['Aperture[C2].Name']
-    if 'Aperture[OBJ].Name' in customDict:
-        acqDict['ObjAperture'] = customDict['Aperture[OBJ].Name']
+    if 'Dose' in customDict2:
+        acqDict['Dose'] = float(customDict2['Dose']) * math.pow(10, -20)
+    if 'PhasePlateUsed' in customDict2:
+        acqDict['PhasePlateUsed'] = customDict2['PhasePlateUsed']
+    if 'Aperture[C2].Name' in customDict2:
+        acqDict['C2Aperture'] = customDict2['Aperture[C2].Name']
+    if 'Aperture[OBJ].Name' in customDict2:
+        acqDict['ObjAperture'] = customDict2['Aperture[OBJ].Name']
 
-        if customDict['PhasePlateUsed'] == 'true':
-            acqDict['PhasePlateNumber'] = customDict['PhasePlateApertureName'].split(" ")[-1]
-            acqDict['PhasePlatePosition'] = customDict['PhasePlatePosition']
+        if customDict2['PhasePlateUsed'] == 'true':
+            acqDict['PhasePlateNumber'] = customDict2['PhasePlateApertureName'].split(" ")[-1]
+            acqDict['PhasePlatePosition'] = customDict2['PhasePlatePosition']
 
-    if 'DoseOnCamera' in customDict:
-        acqDict['DoseOnCamera'] = customDict['DoseOnCamera']
+    if 'DoseOnCamera' in customDict2:
+        acqDict['DoseOnCamera'] = customDict2['DoseOnCamera']
 
     calcDose(acqDict)
 
@@ -248,7 +310,9 @@ def parseHoleXml(root, acqDict):
 
 
 def calcDose(acqDict):
-    """ Calculate dose rate per unbinned px per s. """
+    """ Calculate dose rate per unbinned px per s.
+    Here we use Dose (e/A^2) to compute dose on camera in e/px/s
+    """
     numFr = int(acqDict['NumSubFrames'])
     dose_total = float(acqDict['Dose'])  # e/A^2
     exp = float(acqDict['ExposureTime'])  # s
@@ -270,9 +334,15 @@ def calcDose(acqDict):
     acqDict['Dose'] = round(dose_total, 2)
 
 
+def main():
+    parser = argparse.ArgumentParser(
+        prog="parse_epu_session.py",
+        description=f"TFS EPU parser",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(dest="filename", help="File containing a list of EpuSession.dm files")
+    args = parser.parse_args()
+    parse_files(Path(args.filename))
+
 if __name__ == "__main__":
-    if len(sys.argv) == 2:
-        parseFiles(sys.argv[1])
-        print()
-    else:
-        raise ValueError(f"Unrecognized input, please use: {os.path.basename(sys.argv[0])} filename")
+    main()

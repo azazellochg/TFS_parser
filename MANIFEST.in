@@ -1,0 +1,3 @@
+include CHANGES.rst
+include get_files.sh
+include .streamlit/config.toml
