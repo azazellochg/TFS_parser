@@ -11,7 +11,7 @@ import mdocfile as md
 import pandas as pd
 import numpy as np
 
-DEBUG = True
+DEBUG = False
 ns = {'app': 'Applications.Tomography.Version.2'}
 
 
@@ -106,10 +106,15 @@ def parseTSMdoc(ts_fn: Path, acqDict):
     for key in keys:
         acqDict[key] = first_row[key]
 
-    # movies are never binned
-    acqDict["PixelSpacing"] = float(acqDict['PixelSpacing']) / int(acqDict['Binning'])
+    acqDict["Magnification"] = int(acqDict["Magnification"])
+    acqDict["Binning"] = int(acqDict["Binning"])
+    acqDict["Voltage"] = int(acqDict["Voltage"])
+    acqDict["SpotSize"] = int(acqDict["SpotSize"])
 
-    acqDict["EnergySelectionSlitWidth"] = first_row["FilterSlitAndLoss"][0]
+    # movies are never binned
+    acqDict["PixelSpacing"] = float(acqDict['PixelSpacing']) / acqDict['Binning']
+
+    acqDict["EnergySelectionSlitWidth"] = int(first_row["FilterSlitAndLoss"][0])
     acqDict["DosePerFrame"] = first_row["FrameDosesAndNumber"][0][0]
     acqDict["DosePerTilt"] = first_row["ExposureDose"] if "ExposureDose" in first_row.index else 0.0
     acqDict["DoseTotal"] = acqDict["DosePerTilt"] * len(df)

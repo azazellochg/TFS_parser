@@ -7,7 +7,7 @@ import math
 import argparse
 import xml.etree.ElementTree as ET
 
-DEBUG = True
+DEBUG = False
 UNKNOWN = "UNKNOWN"
 nspace = {
     'so': '{http://schemas.datacontract.org/2004/07/Fei.SharedObjects}',

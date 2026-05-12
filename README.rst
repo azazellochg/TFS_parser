@@ -39,8 +39,12 @@ It will generate **filelist.csv**
 CSV columns (EPU)
 -----------------
 
+* AfisMode
+* AutoZeroLossEnabled
+* AutoZeroLossPeriodicity
 * Autofocus distance (um)
 * Autofocus recurrence
+* AutoloaderSlot
 * BeamSize (um)
 * Binning
 * C2Aperture (um)
@@ -56,10 +60,12 @@ CSV columns (EPU)
 * DosePerFrame (e/A^2/frame)
 * Drift recurrence
 * Drift threshold (m/s)
-* EnergySelectionSlitWidth (eV)
 * EPUversion
+* EnergySelectionSlitWidth (eV)
 * ExposureTime (s)
 * ExtractorVoltage (V)
+* GridGeometry
+* GridType
 * GunLens
 * HoleSize (um)
 * HoleSpacing (um)
@@ -67,8 +73,8 @@ CSV columns (EPU)
 * MicroscopeID
 * Mode
 * Name
-* Number of exposures (per hole)
 * NumSubFrames
+* Number of exposures (per hole)
 * ObjAperture (um)
 * PhasePlateEnabled
 * PhasePlateUsed
@@ -77,9 +83,34 @@ CSV columns (EPU)
 * SpecimenCarrierType
 * SpotSize
 * StartDateTime
+* TiltAngle
+* TiltedAcquisitionEnabled
 * Voltage (kV)
 
 CSV columns (Tomo)
 -----------------
 
-tbd
+* Binning
+* DoseFractionsOutputFormat
+* DoseOnCamera (e/unbinned_px/s)
+* DosePerFrame (e/A^2/frame)
+* DosePerTilt (e/A^2)
+* DoseTotal (e/A^2)
+* EnergySelectionSlitWidth (eV)
+* ExposureTime (s)
+* Lamella
+* Magnification
+* Name
+* NumSubFrames
+* PixelSpacing (A, unbinned)
+* RotationAngle
+* SpecimenType
+* SpotSize
+* StartDateTime
+* TargetDefocus (um)
+* TiltAngleMax
+* TiltAngleMin
+* TiltAngleStart
+* TiltAngleStep
+* TiltAxisAngle
+* Voltage (kV)
